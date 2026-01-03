@@ -1,0 +1,93 @@
+import bpy
+import json
+from pathlib import Path
+from mathutils import Vector, Matrix
+import math
+
+# ====== SETTINGS ======
+JSON_PATH = r"/Users/tkimura/Desktop/centerline_polylines_mm_centered.json" # ←書き換え
+COLLECTION_NAME = "Centerlines_JSON"
+
+# ★確定：あなたの環境では 1mm → 0.02 BU（= 20倍相当）
+MM_TO_BU = 0.02
+
+# 仰臥位：頭尾をYへ（あなたの運用どおり）
+ROT_X_DEG = -90.0
+
+# 見やすさ（必要なら）
+BEVEL_DEPTH_MM = 0.6   # 0にすると線だけ
+BEVEL_RESOLUTION = 2
+# ======================
+
+def ensure_collection(name: str):
+    col = bpy.data.collections.get(name)
+    if col is None:
+        col = bpy.data.collections.new(name)
+        bpy.context.scene.collection.children.link(col)
+    return col
+
+def import_polylines_curve(json_path: str):
+    p = Path(json_path)
+    if not p.exists():
+        raise FileNotFoundError(f"JSON not found: {p}")
+
+    data = json.loads(p.read_text(encoding="utf-8"))
+    polylines = data.get("polylines", [])
+    if not polylines:
+        raise ValueError("No 'polylines' found in JSON.")
+
+    col = ensure_collection(COLLECTION_NAME)
+
+    curve_data = bpy.data.curves.new(name=p.stem, type='CURVE')
+    curve_data.dimensions = '3D'
+    curve_data.resolution_u = 1
+
+    if BEVEL_DEPTH_MM and BEVEL_DEPTH_MM > 0:
+        curve_data.bevel_depth = BEVEL_DEPTH_MM * MM_TO_BU
+        curve_data.bevel_resolution = BEVEL_RESOLUTION
+
+    obj = bpy.data.objects.new(name="centerline_polylines_mm", object_data=curve_data)
+    col.objects.link(obj)
+
+    Rx = Matrix.Rotation(math.radians(ROT_X_DEG), 4, 'X')
+
+    # まず全部スプラインとして入れる（mm→BU、回転適用）
+    n_added = 0
+    all_world_pts = []
+
+    for pl in polylines:
+        pts = pl.get("points_mm", [])
+        if pts is None or len(pts) < 2:
+            continue
+
+        sp = curve_data.splines.new(type='POLY')
+        sp.points.add(len(pts) - 1)
+
+        for i, (x, y, z) in enumerate(pts):
+            p_bu = Vector((x * MM_TO_BU, y * MM_TO_BU, z * MM_TO_BU))
+            p_bu = (Rx @ p_bu.to_4d()).to_3d()
+            sp.points[i].co = (p_bu.x, p_bu.y, p_bu.z, 1.0)
+            all_world_pts.append(p_bu)
+
+        n_added += 1
+
+    if n_added == 0:
+        raise ValueError("No valid polylines imported.")
+
+    # ★中心を world 原点へ（CTが原点中心なら合わせやすい）
+    vmin = Vector((min(p.x for p in all_world_pts), min(p.y for p in all_world_pts), min(p.z for p in all_world_pts)))
+    vmax = Vector((max(p.x for p in all_world_pts), max(p.y for p in all_world_pts), max(p.z for p in all_world_pts)))
+    center = (vmin + vmax) * 0.5
+    obj.location = obj.location - center
+
+    # 選択して見えるように
+    bpy.ops.object.select_all(action='DESELECT')
+    obj.select_set(True)
+    bpy.context.view_layer.objects.active = obj
+
+    print(f"[OK] Imported splines: {n_added}")
+    print(f"Applied: MM_TO_BU={MM_TO_BU}  ROT_X={ROT_X_DEG}deg  CenterShift={center}")
+    return obj
+
+# ---- RUN ----
+import_polylines_curve(JSON_PATH)
