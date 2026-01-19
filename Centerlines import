@@ -5,14 +5,21 @@ from mathutils import Vector, Matrix
 import math
 
 # ====== SETTINGS ======
-JSON_PATH = r'/Users/tkimura/Desktop/Blender/Vessel Path/centerline_polylines_mm_centered.json' # ← centered版
+JSON_PATH = r'/Users/tkimura/Desktop/Blender/Vessel Path/centerline_polylines_mm_centered.json'
 COLLECTION_NAME = "Centerlines_JSON"
 
-MM_TO_BU = 0.02          # 1mm → 0.02 BU（あなたのCT表示に合わせる）
-ROT_X_DEG = -90.0        # 仰臥位（頭尾をYへ）
+MM_TO_BU = 0.02
+ROT_X_DEG = -90.0
 
 BEVEL_DEPTH_MM = 0.6
 BEVEL_RESOLUTION = 2
+
+# ★滑らかさ（表示/レンダー）
+CURVE_RES_U = 16
+
+# ★NURBSの性質
+NURBS_ORDER = 4          # 4が無難（3でもOK）
+USE_ENDPOINT = True      # 端点を通す（形が元点列に寄る）
 # ======================
 
 def ensure_collection(name: str):
@@ -21,6 +28,13 @@ def ensure_collection(name: str):
         col = bpy.data.collections.new(name)
         bpy.context.scene.collection.children.link(col)
     return col
+
+def safe_select_active(obj):
+    vl = bpy.context.view_layer
+    for o in vl.objects:
+        o.select_set(False)
+    obj.select_set(True)
+    vl.objects.active = obj
 
 def import_centered_polylines_curve(json_path: str):
     p = Path(json_path)
@@ -32,16 +46,12 @@ def import_centered_polylines_curve(json_path: str):
     if not polylines:
         raise ValueError("No 'polylines' found in JSON.")
 
-    # （任意）meta確認
-    meta = data.get("meta", {})
-    anchor = meta.get("anchor", {})
-    print("anchor meta:", anchor)
-
     col = ensure_collection(COLLECTION_NAME)
 
     curve_data = bpy.data.curves.new(name=p.stem, type='CURVE')
     curve_data.dimensions = '3D'
-    curve_data.resolution_u = 1
+    curve_data.resolution_u = CURVE_RES_U
+    curve_data.render_resolution_u = CURVE_RES_U
 
     if BEVEL_DEPTH_MM and BEVEL_DEPTH_MM > 0:
         curve_data.bevel_depth = BEVEL_DEPTH_MM * MM_TO_BU
@@ -58,31 +68,32 @@ def import_centered_polylines_curve(json_path: str):
         if pts is None or len(pts) < 2:
             continue
 
-        sp = curve_data.splines.new(type='POLY')
+        sp = curve_data.splines.new(type='NURBS')
         sp.points.add(len(pts) - 1)
 
+        # NURBS設定（点数が少ないとorderは下げる必要あり）
+        sp.order_u = min(NURBS_ORDER, len(pts))  # order <= point count
+        sp.use_endpoint_u = USE_ENDPOINT
+        sp.resolution_u = CURVE_RES_U
+
         for i, (x, y, z) in enumerate(pts):
-            # centered JSON なので “そのまま” mm→BU、回転だけでOK
-            p_bu = Vector((x * MM_TO_BU, y * MM_TO_BU, z * MM_TO_BU))
-            p_bu = (Rx @ p_bu.to_4d()).to_3d()
-            sp.points[i].co = (p_bu.x, p_bu.y, p_bu.z, 1.0)
+            v = Vector((x * MM_TO_BU, y * MM_TO_BU, z * MM_TO_BU))
+            v = (Rx @ v.to_4d()).to_3d()
+            # NURBSは (x,y,z,w) の w が重み。とりあえず 1.0 固定でOK
+            sp.points[i].co = (v.x, v.y, v.z, 1.0)
 
         n_added += 1
 
     if n_added == 0:
         raise ValueError("No valid polylines imported.")
 
-    # ★ここが重要：centered JSONでは “再センタリングしない”
     obj.location = (0.0, 0.0, 0.0)
     obj.rotation_euler = (0.0, 0.0, 0.0)
     obj.scale = (1.0, 1.0, 1.0)
 
-    bpy.ops.object.select_all(action='DESELECT')
-    obj.select_set(True)
-    bpy.context.view_layer.objects.active = obj
+    safe_select_active(obj)
 
-    print(f"[OK] Imported splines: {n_added}")
-    print(f"Applied: MM_TO_BU={MM_TO_BU}, ROT_X={ROT_X_DEG} deg, NO recenter")
+    print(f"[OK] Imported splines: {n_added} (NURBS)")
     return obj
 
 # ---- RUN ----
