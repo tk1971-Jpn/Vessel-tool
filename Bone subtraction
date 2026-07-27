@@ -1,0 +1,118 @@
+import bpy
+import bmesh
+from mathutils.bvhtree import BVHTree
+from mathutils import Vector
+
+# ====== SETTINGS ======
+# 判定対象とするコレクション名のリスト（例: "Bone" や "Vessel" など）
+# ここに含まれるすべてのメッシュ内部の点が削除対象になります
+TARGET_COLLECTION_NAMES = ["Bone", "Vessel"] 
+
+# 個別にオブジェクト名をリスト指定したい場合はここに追加（空リスト [] でも可）
+TARGET_OBJECT_NAMES = ["right kidney", "left kidney", "spleen", "heart"]
+
+# 処理対象の血管カーブオブジェクト名
+CURVE_OBJ_NAME = "vessel_centerline_perfect"  # または選択中のカーブなど
+# ======================
+
+def is_point_inside_bvhtrees(point: Vector, bvhtrees: list, max_dist=1000.0) -> bool:
+    """
+    いずれかのBVHTree（メッシュ）の内部に点があるか判定
+    """
+    ray_dir = Vector((0.0, 0.0, 1.0))
+    
+    for tree in bvhtrees:
+        hit_count = 0
+        curr_origin = point.copy()
+        
+        while True:
+            hit, normal, index, dist = tree.ray_cast(curr_origin, ray_dir, max_dist)
+            if hit is None:
+                break
+            hit_count += 1
+            curr_origin = hit + ray_dir * 1e-4
+
+        # 奇数回交差＝メッシュ内部
+        if (hit_count % 2) == 1:
+            return True
+            
+    return False
+
+def filter_vessels_by_collections():
+    # 判定対象の全メッシュオブジェクトを収集
+    target_objs = set()
+
+    for col_name in TARGET_COLLECTION_NAMES:
+        col = bpy.data.collections.get(col_name)
+        if col:
+            for obj in col.all_objects:
+                if obj.type == 'MESH':
+                    target_objs.add(obj)
+
+    for obj_name in TARGET_OBJECT_NAMES:
+        obj = bpy.data.objects.get(obj_name)
+        if obj and obj.type == 'MESH':
+            target_objs.add(obj)
+
+    if not target_objs:
+        raise ValueError("判定対象のメッシュオブジェクトが見つかりませんでした。コレクション名を確認してください。")
+
+    curve_obj = bpy.data.objects.get(CURVE_OBJ_NAME)
+    if not curve_obj or curve_obj.type != 'CURVE':
+        raise ValueError(f"カーブオブジェクト '{CURVE_OBJ_NAME}' が見つかりません。")
+
+    print(f"対象メッシュ数: {len(target_objs)} 個のメッシュから判定用ツリーを作成中...")
+
+    # 全対象メッシュのBVHTreeを作成
+    bvhtrees = []
+    for obj in target_objs:
+        bm = bmesh.new()
+        bm.from_mesh(obj.data)
+        bm.transform(obj.matrix_world)
+        tree = BVHTree.FromBMesh(bm)
+        bvhtrees.append(tree)
+        bm.free()
+
+    curve_data = curve_obj.data
+    curve_matrix = curve_obj.matrix_world
+
+    print("カーブ制御点のマスク処理を実行中...")
+
+    new_splines_coords = []
+
+    for sp in curve_data.splines:
+        current_segment = []
+        
+        for p in sp.points:
+            local_pos = Vector((p.co.x, p.co.y, p.co.z))
+            world_pos = curve_matrix @ local_pos
+
+            # いずれかのターゲット領域に入っているかチェック
+            inside = is_point_inside_bvhtrees(world_pos, bvhtrees)
+
+            if not inside:
+                current_segment.append((p.co.x, p.co.y, p.co.z, p.co.w))
+            else:
+                if len(current_segment) >= 2:
+                    new_splines_coords.append(current_segment)
+                current_segment = []
+
+        if len(current_segment) >= 2:
+            new_splines_coords.append(current_segment)
+
+    # 既存スプラインを消去して再構築
+    curve_data.splines.clear()
+
+    for coords in new_splines_coords:
+        new_sp = curve_data.splines.new(type='NURBS')
+        new_sp.points.add(len(coords) - 1)
+        new_sp.order_u = min(4, len(coords))
+        new_sp.use_endpoint_u = True
+
+        for i, co in enumerate(coords):
+            new_sp.points[i].co = co
+
+    print(f"[SUCCESS] 処理完了: 残った線分セグメント数 = {len(new_splines_coords)}")
+
+# 実行
+filter_vessels_by_collections()
