@@ -5,54 +5,52 @@ import os
 # ==========================================
 # 設定
 # ==========================================
-# AIが推論出力したJSONファイルのパスを指定
-JSON_PATH = os.path.expanduser("/Users/tkimura/Desktop/sma_predicted_case01.json") # パスを適宜変更してください
-OBJECT_NAME = "SMA_Predicted_AI"  # Blender上に作成されるオブジェクト名
+JSON_PATH = "/Users/tkimura/Desktop/sma_predicted_case01.json"
+OBJECT_NAME = "SMA_Predicted_AI"
 
-def create_sma_path_from_json():
-    # 1. JSONファイルの読み込み
+def create_smooth_sma_path():
     if not os.path.exists(JSON_PATH):
-        print(f"エラー: ファイルが見つかりません -> {JSON_PATH}")
+        print(f"エラー: ファイルが存在しません -> {JSON_PATH}")
         return
 
     with open(JSON_PATH, 'r', encoding='utf-8') as f:
         data = json.load(f)
 
-    # 座標リストの取得 (sma_path_points キーを参照)
     points = data.get("sma_path_points", [])
-    if not points:
-        print("エラー: JSON内に 'sma_path_points' が見つかりませんでした。")
+    num_pts = len(points)
+
+    if num_pts < 2:
+        print("エラー: 頂点数が不足しています。")
         return
 
-    print(f"読み込んだ点数: {len(points)} 点")
-
-    # 2. 既存の同名オブジェクトがあれば削除（上書き用）
+    # 古い同名オブジェクトを削除
     old_obj = bpy.data.objects.get(OBJECT_NAME)
     if old_obj:
         bpy.data.objects.remove(old_obj, do_unlink=True)
 
-    # 3. 新しい Curve データとオブジェクトの作成
+    # 1. 新しい Curve データの作成
     curve_data = bpy.data.curves.new(name=OBJECT_NAME, type='CURVE')
     curve_data.dimensions = '3D'
-    curve_data.bevel_depth = 0.003  # パスを画面で見やすくするための太さ（必要に応じて変更）
+    curve_data.bevel_depth = 0.003  # 血管の太さ
 
-    # 4. スプライン（Poly Curve）の作成
-    spline = curve_data.splines.new('POLY')
-    spline.points.add(len(points) - 1)  # 1点は最初から存在するため N-1 点追加
+    # 2. 最初から全点数(num_pts)を持った BEZIER スプラインとして作成
+    spline = curve_data.splines.new('BEZIER')
+    spline.bezier_points.add(num_pts - 1)  # 全頂点分を一括確保
 
-    # 5. 頂点座標の設定
+    # 3. 座標を一括割り当て & ハンドルを AUTO(滑らか) に自動計算
     for i, pt in enumerate(points):
-        # pt は [x, y, z] -> BlenderのPoly点には (x, y, z, w) の4次元で渡す (w=1.0)
-        spline.points[i].co = (pt[0], pt[1], pt[2], 1.0)
+        bp = spline.bezier_points[i]
+        # 頂点座標（スナップ点）の設定
+        bp.co = (pt[0], pt[1], pt[2])
+        # ハンドルタイプを AUTO に設定（各点を通るしなやかな曲線へ自動補間）
+        bp.handle_left_type = 'AUTO'
+        bp.handle_right_type = 'AUTO'
 
-    # 6. シーンへの配置
+    # 4. オブジェクト生成とシーン追加
     obj = bpy.data.objects.new(OBJECT_NAME, curve_data)
     bpy.context.collection.objects.link(obj)
-
-    # ビューポートの更新
     bpy.context.view_layer.update()
-    
-    print(f"🎉 成功: '{OBJECT_NAME}' をBlender上に配置しました！")
 
-# 実行
-create_sma_path_from_json()
+    print(f"🎉 根元までしなやかなPathを作成しました ({num_pts}点一括配置)")
+
+create_smooth_sma_path()
