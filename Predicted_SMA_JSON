@@ -1,0 +1,64 @@
+import bpy
+import json
+import os
+
+# ==========================================
+# 設定
+# ==========================================
+# 保存先フォルダ（お使いの環境に合わせて変更してください）
+# macOSの例: "/Users/tkimura/Desktop/SMA_GroundTruth" など
+OUTPUT_DIR = os.path.expanduser("/Users/tkimura/Desktop") 
+OUTPUT_FILENAME = "sma_gt_case01.json"  # 保存するファイル名
+
+TARGET_OBJ_NAME = "SMA_Template"  # 対象のPathオブジェクト名
+
+def export_path_to_json():
+    # 1. オブジェクトの取得
+    obj = bpy.data.objects.get(TARGET_OBJ_NAME)
+    
+    if not obj:
+        # アクティブ選択中のオブジェクトをフォールバックとして使用
+        obj = bpy.context.active_object
+        if not obj or obj.type != 'CURVE':
+            print(f"エラー: Curveオブジェクト '{TARGET_OBJ_NAME}' が見つかりません。")
+            return
+
+    print(f"対象オブジェクト: {obj.name}")
+
+    # 2. ワールド行列の取得（移動・回転・拡大縮小を反映させた正確な3D座標を得るため）
+    matrix_world = obj.matrix_world
+    path_points = []
+
+    # 3. 頂点座標の抽出
+    spline = obj.data.splines[0]  # 最初のスプラインを取得
+    
+    if len(spline.bezier_points) > 0:
+        # ベジェ曲線の場合
+        for pt in spline.bezier_points:
+            world_pos = matrix_world @ pt.co
+            path_points.append([round(world_pos.x, 6), round(world_pos.y, 6), round(world_pos.z, 6)])
+    else:
+        # Poly / Nurbs の場合
+        for pt in spline.points:
+            # pt.co は (x, y, z, w) の4次元ベクトルのため xyz のみ取得
+            world_pos = matrix_world @ pt.co.xyz
+            path_points.append([round(world_pos.x, 6), round(world_pos.y, 6), round(world_pos.z, 6)])
+
+    # 4. JSONデータの構築
+    data = {
+        "object_name": obj.name,
+        "num_points": len(path_points),
+        "sma_path_points": path_points
+    }
+
+    # 5. ファイル保存
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    file_path = os.path.join(OUTPUT_DIR, OUTPUT_FILENAME)
+    
+    with open(file_path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=4, ensure_ascii=False)
+
+    print(f"正常に出力されました ({len(path_points)}点): {file_path}")
+
+# 実行
+export_path_to_json()
