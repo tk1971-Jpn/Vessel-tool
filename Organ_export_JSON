@@ -1,0 +1,74 @@
+import bpy
+import json
+import os
+
+# ==========================================
+# 設定
+# ==========================================
+OUTPUT_DIR = os.path.expanduser("/Users/tkimura/Desktop")
+OUTPUT_FILENAME = "organs_landmarks_case01.json"
+
+# 抽出対象のオブジェクト名とJSON出力用のキー名
+TARGET_ORGANS = {
+    "pancreas": "Pancreas",
+    "aorta": "Aorta",
+    "inferior vena cava": "IVC",
+    "portal vein and splenic vein": "PV_SV"
+}
+
+# 頂点抽出のステップ間隔（大きすぎるとスカスカ、1だと重くなります）
+# メッシュの密度に合わせて調整可能ですが、通常は 3～5 程度が扱いやすいです
+SAMPLE_STEP = 3  
+
+def export_landmarks_to_json():
+    all_organs_data = {}
+    
+    for obj_name, json_key in TARGET_ORGANS.items():
+        obj = bpy.data.objects.get(obj_name)
+        
+        if not obj:
+            print(f"⚠️ 警告: オブジェクト '{obj_name}' が見つかりませんでした。スキップします。")
+            continue
+            
+        matrix_world = obj.matrix_world
+        sampled_points = []
+        
+        # メッシュの場合
+        if obj.type == 'MESH':
+            vertices = obj.data.vertices
+            for i in range(0, len(vertices), SAMPLE_STEP):
+                v_world = matrix_world @ vertices[i].co
+                sampled_points.append([round(v_world.x, 6), round(v_world.y, 6), round(v_world.z, 6)])
+                
+        # Curve（パス）オブジェクトの場合にも対応
+        elif obj.type == 'CURVE':
+            for spline in obj.data.splines:
+                pts = spline.points if len(spline.points) > 0 else spline.bezier_points
+                for i in range(0, len(pts), SAMPLE_STEP):
+                    pt_co = pts[i].co.xyz if hasattr(pts[i], 'co') and len(pts[i].co) == 4 else pts[i].co
+                    v_world = matrix_world @ pt_co
+                    sampled_points.append([round(v_world.x, 6), round(v_world.y, 6), round(v_world.z, 6)])
+
+        all_organs_data[json_key] = {
+            "original_name": obj_name,
+            "num_points": len(sampled_points),
+            "points": sampled_points
+        }
+        
+        print(f"✅ {json_key} ({obj_name}): {len(sampled_points)} 点を出力")
+
+    if not all_organs_data:
+        print("エラー: 対象のオブジェクトが1つも見つかりませんでした。")
+        return
+
+    # 保存処理
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    file_path = os.path.join(OUTPUT_DIR, OUTPUT_FILENAME)
+    
+    with open(file_path, 'w', encoding='utf-8') as f:
+        json.dump(all_organs_data, f, indent=4, ensure_ascii=False)
+
+    print(f"\n🎉 ランドマーク臓器データの出力が完了しました: {file_path}")
+
+# 実行
+export_landmarks_to_json()
