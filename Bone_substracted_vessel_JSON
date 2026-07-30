@@ -1,86 +1,63 @@
 import bpy
-import mathutils
-from mathutils import Vector
+import json
+import os
 
 # ==========================================
-# 設定パラメータ
+# 設定
 # ==========================================
-SMA_OBJ_NAME = "SMA_Template"               # 10点のベースPathオブジェクト名
-VESSEL_OBJ_NAME = "vessel_centerline_perfect" # 抽出済みの散在データ（CurveまたはMesh）
-SEARCH_RADIUS = 1                # 探索半径（Blender単位 / 15mm相当。状況に合わせて調整）
-SMOOTH_FACTOR = 1                # 形状の滑らかさ維持度 (0.0 ～ 1.0)
+OUTPUT_DIR = os.path.expanduser("~/Desktop")
+OUTPUT_FILENAME = "case01_vessel_subtracted.json"  # 症例ごとに変更してください
 
+TARGET_OBJ_NAME = "vessel_centerline_perfect"  # 対象オブジェクト名
 
-def snap_sma_to_vessel_density():
-    sma_obj = bpy.data.objects.get(SMA_OBJ_NAME)
-    vessel_obj = bpy.data.objects.get(VESSEL_OBJ_NAME)
+def export_subtracted_vessel_to_json():
+    # 1. オブジェクトの取得
+    obj = bpy.data.objects.get(TARGET_OBJ_NAME)
     
-    if not sma_obj:
-        print(f"エラー: オブジェクト '{SMA_OBJ_NAME}' が見つかりません。")
-        return
-    if not vessel_obj:
-        print(f"エラー: オブジェクト '{VESSEL_OBJ_NAME}' が見つかりません。")
+    if not obj:
+        print(f"エラー: オブジェクト '{TARGET_OBJ_NAME}' が見つかりません。")
         return
 
-    # 1. 散在データから全頂点のワールド座標を取得
+    print(f"対象オブジェクト: {obj.name} (Type: {obj.type})")
+
+    matrix_world = obj.matrix_world
     vessel_points = []
-    matrix_vessel = vessel_obj.matrix_world
-    
-    if vessel_obj.type == 'CURVE':
-        for spline in vessel_obj.data.splines:
-            for pt in spline.points:
-                vessel_points.append(matrix_vessel @ pt.co.xyz)
-            for pt in spline.bezier_points:
-                vessel_points.append(matrix_vessel @ pt.co)
-    elif vessel_obj.type == 'MESH':
-        for v in vessel_obj.data.vertices:
-            vessel_points.append(matrix_vessel @ v.co)
 
-    if not vessel_points:
-        print("エラー: 参照用データ内に抽出ポイントが存在しません。")
+    # 2. オブジェクトタイプに応じた座標抽出
+    if obj.type == 'CURVE':
+        # Curve（ちぎれた複数のPath群）の場合
+        for spline in obj.data.splines:
+            pts = spline.points if len(spline.points) > 0 else spline.bezier_points
+            for pt in pts:
+                pt_co = pt.co.xyz if hasattr(pt, 'co') and len(pt.co) == 4 else pt.co
+                v_world = matrix_world @ pt_co
+                vessel_points.append([round(v_world.x, 6), round(v_world.y, 6), round(v_world.z, 6)])
+
+    elif obj.type == 'MESH':
+        # Mesh（頂点群）の場合
+        for v in obj.data.vertices:
+            v_world = matrix_world @ v.co
+            vessel_points.append([round(v_world.x, 6), round(v_world.y, 6), round(v_world.z, 6)])
+
+    else:
+        print(f"エラー: サポートされていないオブジェクトタイプです: {obj.type}")
         return
 
-    # 2. SMAの各頂点を密度（重心）へスナップ
-    spline = sma_obj.data.splines[0]
-    points = spline.points if len(spline.points) > 0 else spline.bezier_points
-    matrix_sma_inv = sma_obj.matrix_world.inverted()
+    # 3. JSONデータの構築
+    data = {
+        "object_name": obj.name,
+        "num_points": len(vessel_points),
+        "vessel_points": vessel_points
+    }
 
-    new_world_positions = []
-
-    for pt in points:
-        pt_world = sma_obj.matrix_world @ pt.co.xyz
-        
-        # 探索半径内にある近接点を収集
-        nearby_points = [vp for vp in vessel_points if (vp - pt_world).length <= SEARCH_RADIUS]
-        
-        if nearby_points:
-            # 近傍の重心（Density Center）を計算
-            center = sum(nearby_points, Vector((0.0, 0.0, 0.0))) / len(nearby_points)
-            new_world_positions.append(center)
-        else:
-            # 近くにデータがない場合は現状維持
-            new_world_positions.append(pt_world)
-
-    # 3. スムージング処理（極端な曲がりを補正）
-    smoothed_positions = list(new_world_positions)
-    for i in range(1, len(new_world_positions) - 1):
-        prev_p = new_world_positions[i - 1]
-        curr_p = new_world_positions[i]
-        next_p = new_world_positions[i + 1]
-        
-        mid = (prev_p + next_p) / 2.0
-        smoothed_positions[i] = curr_p.lerp(mid, SMOOTH_FACTOR)
-
-    # 4. 座標をSMAオブジェクトに適用
-    for i, pt in enumerate(points):
-        local_pos = matrix_sma_inv @ smoothed_positions[i]
-        pt.co.x, pt.co.y, pt.co.z = local_pos.x, local_pos.y, local_pos.z
-
-    # --- 画面とデータの更新 ---
-    sma_obj.data.update_tag()
-    bpy.context.view_layer.update()
+    # 4. ファイル保存
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    file_path = os.path.join(OUTPUT_DIR, OUTPUT_FILENAME)
     
-    print("SMAの吸着更新完了！")
+    with open(file_path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=4, ensure_ascii=False)
+
+    print(f"🎉 骨除去済み血管点群データを出力しました ({len(vessel_points)}点): {file_path}")
 
 # 実行
-snap_sma_to_vessel_density()
+export_subtracted_vessel_to_json()
