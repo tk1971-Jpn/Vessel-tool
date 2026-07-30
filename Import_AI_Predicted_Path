@@ -1,0 +1,58 @@
+import bpy
+import json
+import os
+
+# ==========================================
+# 設定
+# ==========================================
+# AIが推論出力したJSONファイルのパスを指定
+JSON_PATH = os.path.expanduser("/Users/tkimura/Desktop/sma_predicted_case01.json") # パスを適宜変更してください
+OBJECT_NAME = "SMA_Predicted_AI"  # Blender上に作成されるオブジェクト名
+
+def create_sma_path_from_json():
+    # 1. JSONファイルの読み込み
+    if not os.path.exists(JSON_PATH):
+        print(f"エラー: ファイルが見つかりません -> {JSON_PATH}")
+        return
+
+    with open(JSON_PATH, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+
+    # 座標リストの取得 (sma_path_points キーを参照)
+    points = data.get("sma_path_points", [])
+    if not points:
+        print("エラー: JSON内に 'sma_path_points' が見つかりませんでした。")
+        return
+
+    print(f"読み込んだ点数: {len(points)} 点")
+
+    # 2. 既存の同名オブジェクトがあれば削除（上書き用）
+    old_obj = bpy.data.objects.get(OBJECT_NAME)
+    if old_obj:
+        bpy.data.objects.remove(old_obj, do_unlink=True)
+
+    # 3. 新しい Curve データとオブジェクトの作成
+    curve_data = bpy.data.curves.new(name=OBJECT_NAME, type='CURVE')
+    curve_data.dimensions = '3D'
+    curve_data.bevel_depth = 0.003  # パスを画面で見やすくするための太さ（必要に応じて変更）
+
+    # 4. スプライン（Poly Curve）の作成
+    spline = curve_data.splines.new('POLY')
+    spline.points.add(len(points) - 1)  # 1点は最初から存在するため N-1 点追加
+
+    # 5. 頂点座標の設定
+    for i, pt in enumerate(points):
+        # pt は [x, y, z] -> BlenderのPoly点には (x, y, z, w) の4次元で渡す (w=1.0)
+        spline.points[i].co = (pt[0], pt[1], pt[2], 1.0)
+
+    # 6. シーンへの配置
+    obj = bpy.data.objects.new(OBJECT_NAME, curve_data)
+    bpy.context.collection.objects.link(obj)
+
+    # ビューポートの更新
+    bpy.context.view_layer.update()
+    
+    print(f"🎉 成功: '{OBJECT_NAME}' をBlender上に配置しました！")
+
+# 実行
+create_sma_path_from_json()
